@@ -5,9 +5,6 @@ import xml.etree.ElementTree as ET
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 SOURCES = [
@@ -33,6 +30,14 @@ OUTPUT_DIR = "feeds"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 FB_COOKIES = os.environ.get("FB_COOKIES", "")
+
+# මේවා UI labels/noise — post content නෙවෙයි, filter කරලා ඉවත් කරනවා
+NOISE_STRINGS = {
+    "like", "comment", "share", "search facebook", "see more", "see less",
+    "write a comment", "write a public comment", "most relevant", "reply",
+    "follow", "following", "message", "home", "friends", "notifications",
+    "menu", "watch", "marketplace", "groups", "log in", "sign up",
+}
 
 
 def make_driver():
@@ -83,41 +88,31 @@ def load_cookies(driver):
     return True
 
 
-def debug_dump(driver, label):
-    html = driver.page_source
-    print(f"--- DEBUG [{label}] ---")
-    print("URL:", driver.current_url)
-    print("Title:", driver.title)
-    print("Full HTML length:", len(html))
-    for pattern in ['role="article"', "data-ft", "/story.php", "story_fbid",
-                    'dir="auto"', "aria-posinset", "permalink"]:
-        print(f"  '{pattern}' count:", html.count(pattern))
-
-    # dir="auto" spans වල තියෙන්නේ බොහෝවිට post text, ඒ position එකෙන් snippet එකක් ගන්නවා
-    idx = html.find('dir="auto"')
-    if idx != -1:
-        print("Snippet around first dir='auto':", html[max(0, idx - 200):idx + 1000].replace("\n", " "))
-    else:
-        print("No dir='auto' found anywhere in HTML.")
-    print("--- END DEBUG ---")
+def dump_text_blocks(driver, label):
+    soup = BeautifulSoup(driver.page_source, "html.parser")
+    print(f"--- TEXT DUMP [{label}] ---")
+    seen = []
+    for s in soup.stripped_strings:
+        s_clean = s.strip()
+        if len(s_clean) < 20:
+            continue
+        if s_clean.lower() in NOISE_STRINGS:
+            continue
+        seen.append(s_clean)
+    print(f"Total meaningful text blocks found: {len(seen)}")
+    for i, s in enumerate(seen[:25]):
+        print(f"  [{i}] {s[:150]}")
+    print("--- END TEXT DUMP ---")
 
 
 def scrape_posts(driver, url, max_items=10):
     driver.get(url)
+    time.sleep(5)
 
-    # post links load වෙනකම් උපරිම 15s ඉන්නවා
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//a[contains(@href,'/story.php') or contains(@href,'story_fbid')]"))
-        )
-    except Exception:
-        pass  # timeout උනත් ඉදිරියට යනවා, debug දාන්නම්
-
-    # scroll කරලා lazy content trigger කරනවා
-    for _ in range(2):
+    for _ in range(3):
         try:
-            driver.execute_script("window.scrollBy(0, 800);")
-            time.sleep(1)
+            driver.execute_script("window.scrollBy(0, 1000);")
+            time.sleep(1.5)
         except Exception:
             pass
 
@@ -127,38 +122,24 @@ def scrape_posts(driver, url, max_items=10):
     if "log in to continue" in page_text or "you must log in" in page_text:
         raise RuntimeError("login_wall")
 
+    # heuristic: dir="auto" text blocks, longer than 25 chars, noise filter කරලා
     items = []
-
-    # post permalink links හොයාගෙන, ඒ ළඟ තියෙන text එක ගන්නවා
-    story_links = soup.find_all("a", href=lambda h: h and ("/story.php" in h or "story_fbid" in h or "/posts/" in h))
-
-    seen_links = set()
-    for link_tag in story_links:
-        href = link_tag["href"]
-        if href.startswith("/"):
-            href = "https://m.facebook.com" + href
-        if href in seen_links:
+    for tag in soup.find_all(attrs={"dir": "auto"}):
+        text = tag.get_text(" ", strip=True)
+        if not text or len(text) < 25:
             continue
-
-        # link එකේ parent container එකෙන් text එක ගන්නවා
-        container = link_tag
-        for _ in range(4):
-            if container.parent:
-                container = container.parent
-            else:
-                break
-        text = container.get_text(" ", strip=True)
-        if not text or len(text) < 15:
+        if text.lower() in NOISE_STRINGS:
             continue
-
-        seen_links.add(href)
-        title = text[:120] + ("…" if len(text) > 120 else "")
-        items.append({"title": title, "link": href, "text": text[:500]})
+        # duplicate වළක්වනවා (nested dir=auto tags නිසා)
+        if any(text in existing["text"] or existing["text"] in text for existing in items):
+            continue
+        items.append({"title": text[:120] + ("…" if len(text) > 120 else ""),
+                      "link": url, "text": text[:500]})
         if len(items) >= max_items:
             break
 
     if not items:
-        debug_dump(driver, f"scrape - no items for {url}")
+        dump_text_blocks(driver, f"no items for {url}")
 
     return items
 
