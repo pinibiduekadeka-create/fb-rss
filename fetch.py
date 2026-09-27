@@ -5,6 +5,9 @@ import xml.etree.ElementTree as ET
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 SOURCES = [
@@ -86,27 +89,37 @@ def debug_dump(driver, label):
     print("URL:", driver.current_url)
     print("Title:", driver.title)
     print("Full HTML length:", len(html))
-    print("role='article' count:", html.count('role="article"'))
-    print("data-ft count:", html.count("data-ft"))
-    # <body> tag එකෙන් පස්සේ තියෙන කොටසේ මුල් 3000 chars
-    body_idx = html.find("<body")
-    if body_idx != -1:
-        print("BODY snippet:", html[body_idx:body_idx + 3000].replace("\n", " "))
+    for pattern in ['role="article"', "data-ft", "/story.php", "story_fbid",
+                    'dir="auto"', "aria-posinset", "permalink"]:
+        print(f"  '{pattern}' count:", html.count(pattern))
+
+    # dir="auto" spans වල තියෙන්නේ බොහෝවිට post text, ඒ position එකෙන් snippet එකක් ගන්නවා
+    idx = html.find('dir="auto"')
+    if idx != -1:
+        print("Snippet around first dir='auto':", html[max(0, idx - 200):idx + 1000].replace("\n", " "))
     else:
-        print("BODY tag not found. Full snippet:", html[:3000].replace("\n", " "))
+        print("No dir='auto' found anywhere in HTML.")
     print("--- END DEBUG ---")
 
 
 def scrape_posts(driver, url, max_items=10):
     driver.get(url)
-    time.sleep(4)
 
-    # lazy-loaded content trigger කරන්න ටිකක් scroll කරනවා
+    # post links load වෙනකම් උපරිම 15s ඉන්නවා
     try:
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
-        time.sleep(1.5)
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.XPATH, "//a[contains(@href,'/story.php') or contains(@href,'story_fbid')]"))
+        )
     except Exception:
-        pass
+        pass  # timeout උනත් ඉදිරියට යනවා, debug දාන්නම්
+
+    # scroll කරලා lazy content trigger කරනවා
+    for _ in range(2):
+        try:
+            driver.execute_script("window.scrollBy(0, 800);")
+            time.sleep(1)
+        except Exception:
+            pass
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
 
@@ -116,27 +129,33 @@ def scrape_posts(driver, url, max_items=10):
 
     items = []
 
-    # 1) role="article" (modern m.facebook.com structure)
-    candidates = soup.find_all(attrs={"role": "article"})
+    # post permalink links හොයාගෙන, ඒ ළඟ තියෙන text එක ගන්නවා
+    story_links = soup.find_all("a", href=lambda h: h and ("/story.php" in h or "story_fbid" in h or "/posts/" in h))
 
-    # 2) fallback: data-ft attribute (older structure)
-    if not candidates:
-        candidates = soup.find_all(["article", "div"], attrs={"data-ft": True})
+    seen_links = set()
+    for link_tag in story_links:
+        href = link_tag["href"]
+        if href.startswith("/"):
+            href = "https://m.facebook.com" + href
+        if href in seen_links:
+            continue
 
-    # 3) fallback: mbasic story containers
-    if not candidates:
-        candidates = soup.select("div#m_story_permalink_view, div.story_body_container")
-
-    for block in candidates[:max_items]:
-        text = block.get_text(" ", strip=True)
+        # link එකේ parent container එකෙන් text එක ගන්නවා
+        container = link_tag
+        for _ in range(4):
+            if container.parent:
+                container = container.parent
+            else:
+                break
+        text = container.get_text(" ", strip=True)
         if not text or len(text) < 15:
             continue
-        link_tag = block.find("a", href=True)
-        link = link_tag["href"] if link_tag else url
-        if link.startswith("/"):
-            link = "https://m.facebook.com" + link
+
+        seen_links.add(href)
         title = text[:120] + ("…" if len(text) > 120 else "")
-        items.append({"title": title, "link": link, "text": text[:500]})
+        items.append({"title": title, "link": href, "text": text[:500]})
+        if len(items) >= max_items:
+            break
 
     if not items:
         debug_dump(driver, f"scrape - no items for {url}")
