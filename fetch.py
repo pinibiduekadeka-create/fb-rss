@@ -29,7 +29,6 @@ SOURCES = [
 OUTPUT_DIR = "feeds"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# GitHub Secret එකෙන් ගන්නවා. Format: "c_user=123456; xs=33:abc:2:...:-1:-1::xyz;"
 FB_COOKIES = os.environ.get("FB_COOKIES", "")
 
 
@@ -48,13 +47,10 @@ def make_driver():
 
 
 def load_cookies(driver):
-    """Password/login form automate කරනවා වෙනුවට, already-logged-in
-    session cookies (c_user, xs) browser එකට ඇතුළු කරනවා."""
     if not FB_COOKIES.strip():
-        print("⚠ FB_COOKIES secret එක නෑ — login නැති public content විතරයි ලැබෙන්නේ")
+        print("⚠ FB_COOKIES secret එක නෑ")
         return False
 
-    # cookie set කරන්න කලින් domain එකේ ඉන්නම ඕන
     driver.get("https://www.facebook.com/")
     time.sleep(2)
 
@@ -71,15 +67,13 @@ def load_cookies(driver):
             print(f"  ⚠ cookie '{name}' add කරන්න බැරි වුණා: {e}")
 
     if count == 0:
-        print("✘ එකම cookie එකක්වත් parse කරන්න බැරි වුණා — FB_COOKIES format එක check කරන්න")
         return False
 
     driver.get("https://mbasic.facebook.com/")
     time.sleep(2)
 
-    page_text = driver.page_source.lower()
-    if "log in" in driver.title.lower() or "log into facebook" in page_text:
-        print("✘ Cookies දාපු පස්සෙත් login page එකටම redirect උනා — cookies expire වෙලා ඇති")
+    if "log in" in driver.title.lower():
+        print("✘ cookies expire වෙලා ඇති")
         return False
 
     print(f"✔ {count} cookies loaded, logged-in session එකක් confirmed")
@@ -87,16 +81,32 @@ def load_cookies(driver):
 
 
 def debug_dump(driver, label):
+    html = driver.page_source
     print(f"--- DEBUG [{label}] ---")
     print("URL:", driver.current_url)
     print("Title:", driver.title)
-    print("HTML snippet:", driver.page_source[:800].replace("\n", " "))
+    print("Full HTML length:", len(html))
+    print("role='article' count:", html.count('role="article"'))
+    print("data-ft count:", html.count("data-ft"))
+    # <body> tag එකෙන් පස්සේ තියෙන කොටසේ මුල් 3000 chars
+    body_idx = html.find("<body")
+    if body_idx != -1:
+        print("BODY snippet:", html[body_idx:body_idx + 3000].replace("\n", " "))
+    else:
+        print("BODY tag not found. Full snippet:", html[:3000].replace("\n", " "))
     print("--- END DEBUG ---")
 
 
 def scrape_posts(driver, url, max_items=10):
     driver.get(url)
-    time.sleep(3)
+    time.sleep(4)
+
+    # lazy-loaded content trigger කරන්න ටිකක් scroll කරනවා
+    try:
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
+        time.sleep(1.5)
+    except Exception:
+        pass
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
 
@@ -105,7 +115,15 @@ def scrape_posts(driver, url, max_items=10):
         raise RuntimeError("login_wall")
 
     items = []
-    candidates = soup.find_all(["article", "div"], attrs={"data-ft": True})
+
+    # 1) role="article" (modern m.facebook.com structure)
+    candidates = soup.find_all(attrs={"role": "article"})
+
+    # 2) fallback: data-ft attribute (older structure)
+    if not candidates:
+        candidates = soup.find_all(["article", "div"], attrs={"data-ft": True})
+
+    # 3) fallback: mbasic story containers
     if not candidates:
         candidates = soup.select("div#m_story_permalink_view, div.story_body_container")
 
@@ -116,7 +134,7 @@ def scrape_posts(driver, url, max_items=10):
         link_tag = block.find("a", href=True)
         link = link_tag["href"] if link_tag else url
         if link.startswith("/"):
-            link = "https://mbasic.facebook.com" + link
+            link = "https://m.facebook.com" + link
         title = text[:120] + ("…" if len(text) > 120 else "")
         items.append({"title": title, "link": link, "text": text[:500]})
 
