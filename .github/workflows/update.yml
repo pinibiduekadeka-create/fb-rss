@@ -2,9 +2,8 @@ name: Update RSS Feed
 
 on:
   schedule:
-    # Proti 15 minute por por auto-run hobe
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Proyojon hole manually run korar sujog
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,7 +17,16 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       - name: Run Scraper
+        env:
+          FB_EMAIL: ${{ secrets.FB_EMAIL }}
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}
         run: python fetch.py
 
       - name: Commit and Push changes
