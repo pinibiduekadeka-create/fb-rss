@@ -33,7 +33,6 @@ SOURCES = [
 OUTPUT_DIR = "feeds"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# GitHub Secrets වලින් credentials ගන්නවා (code එකේ කෙලින්ම දාන්නේ නෑ)
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
 
@@ -55,7 +54,7 @@ def make_driver():
 def login(driver):
     """mbasic.facebook.com login form එකෙන් log වෙනවා."""
     if not FB_EMAIL or not FB_PASSWORD:
-        print("⚠ FB_EMAIL / FB_PASSWORD secrets නෑ — login skip කරනවා (public content විතරයි ලැබෙන්නේ)")
+        print("⚠ FB_EMAIL / FB_PASSWORD secrets නෑ — login skip කරනවා")
         return False
 
     driver.get("https://mbasic.facebook.com/login")
@@ -65,7 +64,27 @@ def login(driver):
         pass_field = driver.find_element(By.NAME, "pass")
         email_field.send_keys(FB_EMAIL)
         pass_field.send_keys(FB_PASSWORD)
-        pass_field.submit()
+
+        # .submit() වෙනුවට, actual login button එකම click කරනවා
+        # mbasic form එකේ login button එකේ name="login" කියලා තියෙනවා
+        submitted = False
+        for by, value in [
+            (By.NAME, "login"),
+            (By.XPATH, "//button[@type='submit']"),
+            (By.XPATH, "//input[@type='submit']"),
+        ]:
+            try:
+                btn = driver.find_element(by, value)
+                btn.click()
+                submitted = True
+                break
+            except Exception:
+                continue
+
+        if not submitted:
+            print("✘ Login button එක හොයාගන්න බැරි වුණා")
+            return False
+
         time.sleep(3)
 
         page_text = driver.page_source.lower()
