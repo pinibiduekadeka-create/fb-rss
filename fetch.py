@@ -5,7 +5,6 @@ import xml.etree.ElementTree as ET
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 
 SOURCES = [
@@ -30,8 +29,8 @@ SOURCES = [
 OUTPUT_DIR = "feeds"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-FB_EMAIL = os.environ.get("FB_EMAIL")
-FB_PASSWORD = os.environ.get("FB_PASSWORD")
+# GitHub Secret එකෙන් ගන්නවා. Format: "c_user=123456; xs=33:abc:2:...:-1:-1::xyz;"
+FB_COOKIES = os.environ.get("FB_COOKIES", "")
 
 
 def make_driver():
@@ -48,85 +47,51 @@ def make_driver():
     return webdriver.Chrome(options=options)
 
 
-def dismiss_cookie_banner(driver):
-    """Cookie consent / GDPR overlay එකක් ආවොත් accept කරලා ඉවත් කරනවා."""
-    common_texts = ["Allow all cookies", "Allow essential and optional cookies",
-                    "Accept All", "Accept all", "Only allow essential cookies"]
-    for text in common_texts:
-        try:
-            btn = driver.find_element(By.XPATH, f"//button[contains(., '{text}')]")
-            btn.click()
-            time.sleep(1)
-            print(f"  (cookie banner dismissed: '{text}')")
-            return True
-        except Exception:
+def load_cookies(driver):
+    """Password/login form automate කරනවා වෙනුවට, already-logged-in
+    session cookies (c_user, xs) browser එකට ඇතුළු කරනවා."""
+    if not FB_COOKIES.strip():
+        print("⚠ FB_COOKIES secret එක නෑ — login නැති public content විතරයි ලැබෙන්නේ")
+        return False
+
+    # cookie set කරන්න කලින් domain එකේ ඉන්නම ඕන
+    driver.get("https://www.facebook.com/")
+    time.sleep(2)
+
+    count = 0
+    for pair in FB_COOKIES.split(";"):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
             continue
-    return False
+        name, value = pair.split("=", 1)
+        try:
+            driver.add_cookie({"name": name.strip(), "value": value.strip(), "domain": ".facebook.com"})
+            count += 1
+        except Exception as e:
+            print(f"  ⚠ cookie '{name}' add කරන්න බැරි වුණා: {e}")
+
+    if count == 0:
+        print("✘ එකම cookie එකක්වත් parse කරන්න බැරි වුණා — FB_COOKIES format එක check කරන්න")
+        return False
+
+    driver.get("https://mbasic.facebook.com/")
+    time.sleep(2)
+
+    page_text = driver.page_source.lower()
+    if "log in" in driver.title.lower() or "log into facebook" in page_text:
+        print("✘ Cookies දාපු පස්සෙත් login page එකටම redirect උනා — cookies expire වෙලා ඇති")
+        return False
+
+    print(f"✔ {count} cookies loaded, logged-in session එකක් confirmed")
+    return True
 
 
 def debug_dump(driver, label):
     print(f"--- DEBUG [{label}] ---")
     print("URL:", driver.current_url)
     print("Title:", driver.title)
-    snippet = driver.page_source[:800].replace("\n", " ")
-    print("HTML snippet:", snippet)
+    print("HTML snippet:", driver.page_source[:800].replace("\n", " "))
     print("--- END DEBUG ---")
-
-
-def login(driver):
-    if not FB_EMAIL or not FB_PASSWORD:
-        print("⚠ FB_EMAIL / FB_PASSWORD secrets නෑ — login skip කරනවා")
-        return False
-
-    driver.get("https://mbasic.facebook.com/login")
-    time.sleep(2)
-    dismiss_cookie_banner(driver)
-    time.sleep(1)
-
-    try:
-        email_field = driver.find_element(By.NAME, "email")
-        pass_field = driver.find_element(By.NAME, "pass")
-    except Exception as e:
-        print(f"✘ Email/Password field හොයාගන්න බැරි වුණා: {e}")
-        debug_dump(driver, "login page - fields not found")
-        return False
-
-    email_field.send_keys(FB_EMAIL)
-    pass_field.send_keys(FB_PASSWORD)
-
-    submitted = False
-    for by, value in [
-        (By.NAME, "login"),
-        (By.XPATH, "//button[@type='submit']"),
-        (By.XPATH, "//input[@type='submit']"),
-        (By.XPATH, "//button[contains(text(),'Log In') or contains(text(),'Log in')]"),
-        (By.XPATH, "//input[@value='Log In' or @value='Log in']"),
-    ]:
-        try:
-            btn = driver.find_element(by, value)
-            btn.click()
-            submitted = True
-            print(f"  (submitted using {by}={value})")
-            break
-        except Exception:
-            continue
-
-    if not submitted:
-        print("✘ Login button එක හොයාගන්න බැරි වුණා")
-        debug_dump(driver, "login page - button not found")
-        return False
-
-    time.sleep(3)
-    dismiss_cookie_banner(driver)
-
-    page_text = driver.page_source.lower()
-    if "checkpoint" in page_text or "two factor" in page_text or "confirm" in driver.current_url:
-        print("⚠ Login checkpoint/2FA hit වුණා")
-        debug_dump(driver, "after login - checkpoint")
-        return False
-
-    print("✔ Login සාර්ථකයි (current url:", driver.current_url, ")")
-    return True
 
 
 def scrape_posts(driver, url, max_items=10):
@@ -136,7 +101,7 @@ def scrape_posts(driver, url, max_items=10):
     soup = BeautifulSoup(driver.page_source, "html.parser")
 
     page_text = soup.get_text(" ", strip=True).lower()
-    if "log in to continue" in page_text or "you must log in" in page_text or "checkpoint" in page_text:
+    if "log in to continue" in page_text or "you must log in" in page_text:
         raise RuntimeError("login_wall")
 
     items = []
@@ -156,7 +121,7 @@ def scrape_posts(driver, url, max_items=10):
         items.append({"title": title, "link": link, "text": text[:500]})
 
     if not items:
-        debug_dump(driver, f"scrape - no items found for {url}")
+        debug_dump(driver, f"scrape - no items for {url}")
 
     return items
 
@@ -226,7 +191,7 @@ def build_index():
 if __name__ == "__main__":
     driver = make_driver()
     try:
-        login(driver)
+        load_cookies(driver)
         for src in SOURCES:
             build_feed(src, driver)
     finally:
