@@ -8,9 +8,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 
-# ----------------------------------------------------------------
-# 1) මෙන්න ඔයාගේ FB pages / groups / profiles ලැයිස්තුව.
-# ----------------------------------------------------------------
 SOURCES = [
     {
         "id": "keerthi-ratnayake",
@@ -51,52 +48,85 @@ def make_driver():
     return webdriver.Chrome(options=options)
 
 
+def dismiss_cookie_banner(driver):
+    """Cookie consent / GDPR overlay එකක් ආවොත් accept කරලා ඉවත් කරනවා."""
+    common_texts = ["Allow all cookies", "Allow essential and optional cookies",
+                    "Accept All", "Accept all", "Only allow essential cookies"]
+    for text in common_texts:
+        try:
+            btn = driver.find_element(By.XPATH, f"//button[contains(., '{text}')]")
+            btn.click()
+            time.sleep(1)
+            print(f"  (cookie banner dismissed: '{text}')")
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def debug_dump(driver, label):
+    print(f"--- DEBUG [{label}] ---")
+    print("URL:", driver.current_url)
+    print("Title:", driver.title)
+    snippet = driver.page_source[:800].replace("\n", " ")
+    print("HTML snippet:", snippet)
+    print("--- END DEBUG ---")
+
+
 def login(driver):
-    """mbasic.facebook.com login form එකෙන් log වෙනවා."""
     if not FB_EMAIL or not FB_PASSWORD:
         print("⚠ FB_EMAIL / FB_PASSWORD secrets නෑ — login skip කරනවා")
         return False
 
     driver.get("https://mbasic.facebook.com/login")
     time.sleep(2)
+    dismiss_cookie_banner(driver)
+    time.sleep(1)
+
     try:
         email_field = driver.find_element(By.NAME, "email")
         pass_field = driver.find_element(By.NAME, "pass")
-        email_field.send_keys(FB_EMAIL)
-        pass_field.send_keys(FB_PASSWORD)
-
-        # .submit() වෙනුවට, actual login button එකම click කරනවා
-        # mbasic form එකේ login button එකේ name="login" කියලා තියෙනවා
-        submitted = False
-        for by, value in [
-            (By.NAME, "login"),
-            (By.XPATH, "//button[@type='submit']"),
-            (By.XPATH, "//input[@type='submit']"),
-        ]:
-            try:
-                btn = driver.find_element(by, value)
-                btn.click()
-                submitted = True
-                break
-            except Exception:
-                continue
-
-        if not submitted:
-            print("✘ Login button එක හොයාගන්න බැරි වුණා")
-            return False
-
-        time.sleep(3)
-
-        page_text = driver.page_source.lower()
-        if "checkpoint" in page_text or "two factor" in page_text or "confirm" in driver.current_url:
-            print("⚠ Login checkpoint/2FA hit වුණා — manual verification ඕන වෙන්න පුළුවන්")
-            return False
-
-        print("✔ Login සාර්ථකයි")
-        return True
     except Exception as e:
-        print(f"✘ Login fail වුණා: {e}")
+        print(f"✘ Email/Password field හොයාගන්න බැරි වුණා: {e}")
+        debug_dump(driver, "login page - fields not found")
         return False
+
+    email_field.send_keys(FB_EMAIL)
+    pass_field.send_keys(FB_PASSWORD)
+
+    submitted = False
+    for by, value in [
+        (By.NAME, "login"),
+        (By.XPATH, "//button[@type='submit']"),
+        (By.XPATH, "//input[@type='submit']"),
+        (By.XPATH, "//button[contains(text(),'Log In') or contains(text(),'Log in')]"),
+        (By.XPATH, "//input[@value='Log In' or @value='Log in']"),
+    ]:
+        try:
+            btn = driver.find_element(by, value)
+            btn.click()
+            submitted = True
+            print(f"  (submitted using {by}={value})")
+            break
+        except Exception:
+            continue
+
+    if not submitted:
+        print("✘ Login button එක හොයාගන්න බැරි වුණා")
+        debug_dump(driver, "login page - button not found")
+        return False
+
+    time.sleep(3)
+    dismiss_cookie_banner(driver)
+
+    page_text = driver.page_source.lower()
+    if "checkpoint" in page_text or "two factor" in page_text or "confirm" in driver.current_url:
+        print("⚠ Login checkpoint/2FA hit වුණා")
+        debug_dump(driver, "after login - checkpoint")
+        return False
+
+    print("✔ Login සාර්ථකයි (current url:", driver.current_url, ")")
+    return True
 
 
 def scrape_posts(driver, url, max_items=10):
@@ -124,6 +154,9 @@ def scrape_posts(driver, url, max_items=10):
             link = "https://mbasic.facebook.com" + link
         title = text[:120] + ("…" if len(text) > 120 else "")
         items.append({"title": title, "link": link, "text": text[:500]})
+
+    if not items:
+        debug_dump(driver, f"scrape - no items found for {url}")
 
     return items
 
