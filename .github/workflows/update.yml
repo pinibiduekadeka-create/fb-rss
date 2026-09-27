@@ -25,6 +25,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add feed.xml
-          git commit -m "Auto-update feed every 15 minutes" || exit 0
+          git add feeds/
+          git commit -m "Auto-update feeds every 15 minutes" || exit 0
           git push
