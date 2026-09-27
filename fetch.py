@@ -14,14 +14,19 @@ SOURCES = [
         "url": "https://facebook.com/keerthi.ratnayake.2025",
     },
     {
-        "id": "example-page",
-        "name": "Example Page",
-        "url": "https://facebook.com/example.page",
+        "id": "135618983816878",
+        "name": "my, Navy, Air Force, STF, Police & CSD එකමුතු සංසදය",
+        "url": "https://www.facebook.com/groups/135618983816878",
     },
     {
         "id": "example-group",
         "name": "Example Group",
         "url": "https://facebook.com/groups/example.group",
+    },
+        {
+        "id": "sri-ravana-lanka-tv",
+        "name": "Sri Ravana Lanka News",
+        "url": "https://facebook.com/sriravanalankatv",
     },
     # --- මෙතනට තව එකතු කරන්න ---
 ]
